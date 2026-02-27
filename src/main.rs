@@ -1,32 +1,42 @@
-use clap::{CommandFactory, Parser, Subcommand};
+use anyhow::Result;
+use clap::{CommandFactory, Parser};
 use clap_help::Printer;
-use std::path::PathBuf;
+
+mod service;
+mod args_parser;
+mod filesystem;
+mod filesystem_client;
+mod ipc;
+
+use args_parser::{Cli, Commands};
+use service::Service;
+use filesystem_client::FilesystemClient;
+use ipc::IPCClient;
 
 
-#[derive(Parser)]
-#[command[author="boaztene", about="A time-traveling filesystem written in Rust."]]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Mount {
-        mount_point: PathBuf,
-    },
-}
-
-fn main() {
+fn main() -> Result<()> {
     let args = Cli::parse();
 
     match &args.command {
-        Some(Commands::Mount { mount_point }) => {
-            println!("mounting at: {:?}", mount_point);
+        Some(Commands::Service {  }) => {
+            let mut service = Service::new()?;
+            service.run()?;
+        }
+
+        Some(Commands::Mount { mountpoint }) => {
+            let mut client = FilesystemClient::new()?;
+
+            if let Some(mountpoint) = mountpoint.to_str() {
+                client.mount(mountpoint)?;
+            } else {
+                Printer::new(Cli::command()).print_help();
+            }
         }
 
         None => {
             Printer::new(Cli::command()).print_help();
         }
     }
+
+    Ok(())
 }
