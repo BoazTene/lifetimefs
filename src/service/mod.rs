@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::filesystem::Lifetimefs;
@@ -15,7 +16,7 @@ use serde_json::Value;
 pub struct Service {
     ipc: IPCServer,
     sessions: Arc<Mutex<HashMap<usize, BackgroundSession>>>,
-    next_session_id: usize,
+    next_session_id: Arc<AtomicUsize>,
 }
 
 impl Service {
@@ -25,7 +26,7 @@ impl Service {
         Ok(Service {
             ipc: IPCServer::new()?,
             sessions,
-            next_session_id: 0,
+            next_session_id: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -44,33 +45,56 @@ impl Service {
         id: usize,
         value: Value,
     ) {
+        let mount_command = match MountCommand::deserialize(value) {
+            Ok(command) => command,
+            Err(error) => {
+                eprintln!("Invalid mount command: {error}");
+                return;
+            }
+        };
+
+        let mountpoint = match PathBuf::from_str(&mount_command.mountpoint) {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!("Invalid mountpoint path '{}': {error}", mount_command.mountpoint);
+                return;
+            }
+        };
+
         let sessions_clone = Arc::clone(sessions);
+        let filesystem = match Lifetimefs::new(
+            Box::new(move || {
+                Service::handle_destroy(&sessions_clone, id);
+            }),
+            &mountpoint,
+        ) {
+            Ok(filesystem) => filesystem,
+            Err(error) => {
+                eprintln!("Failed to initialize filesystem for {}: {error}", mountpoint.display());
+                return;
+            }
+        };
+
+        let session = match filesystem.mount() {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!("Failed to mount {}: {error}", mountpoint.display());
+                return;
+            }
+        };
 
         if let Ok(mut sessions) = sessions.lock() {
-            if let Ok(mount_command) = MountCommand::deserialize(value) {
-                if let Ok(mountpoint) = &PathBuf::from_str(&mount_command.mountpoint) {
-                    if let Ok(filesystem) = Lifetimefs::new(
-                        Box::new(move || {
-                            Service::handle_destroy(&sessions_clone, id);
-                        }),
-                        mountpoint,
-                    ) {
-                        if let Ok(session) = filesystem.mount() {
-                            sessions.insert(id, session);
-                        }
-                    }
-                }
-            }
+            sessions.insert(id, session);
         };
     }
 
     fn initialize(&mut self) {
         let sessions = Arc::clone(&self.sessions);
-        let id = self.next_session_id;
-        self.next_session_id += 1;
+        let next_session_id = Arc::clone(&self.next_session_id);
 
         self.ipc
             .register(&CommandActions::Mount.to_string(), move |v| {
+                let id = next_session_id.fetch_add(1, Ordering::Relaxed);
                 Service::handle_mount(&sessions, id, v);
             });
     }
