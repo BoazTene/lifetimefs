@@ -16,4 +16,7 @@ pub enum Commands {
     Mount {
         mountpoint: PathBuf,
     },
+
+    ListMounts {
+    },
 }

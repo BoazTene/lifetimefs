@@ -13,6 +13,8 @@ use service::Service;
 use filesystem_client::FilesystemClient;
 use ipc::IPCClient;
 
+use crate::filesystem::storage::Storage;
+
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -30,6 +32,16 @@ fn main() -> Result<()> {
                 client.mount(mountpoint)?;
             } else {
                 Printer::new(Cli::command()).print_help();
+            }
+        }
+
+        Some(Commands::ListMounts {  }) => {
+            let storage = Storage::default()?;
+            let instances = storage.list_instances()?;
+            if instances.is_empty() {
+                println!("No mounted instances found.");
+            } else {
+                println!("Mounted instances:\n{}", instances.join("\n"));
             }
         }
 
