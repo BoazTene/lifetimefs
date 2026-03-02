@@ -1,15 +1,15 @@
 use anyhow::Result;
 use fuser::{
-    BackgroundSession, BsdFileFlags, Config, Errno, FileAttr, FileHandle, Filesystem, INodeNo,
-    RenameFlags, ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry, Request, TimeOrNow,
+    BackgroundSession, BsdFileFlags, Config, Errno, FileHandle, FileType, Filesystem, FopenFlags,
+    Generation, INodeNo, LockOwner, OpenFlags, RenameFlags, ReplyAttr, ReplyData, ReplyDirectory,
+    ReplyEmpty, ReplyEntry, ReplyOpen, Request, TimeOrNow,
 };
 use std::{
-    collections::HashMap,
     ffi::{OsStr, OsString},
     io::ErrorKind,
     path::{Path, PathBuf},
     process::Command,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 mod errors;
@@ -34,9 +34,21 @@ impl Filesystem for Lifetimefs {
         (self.on_unmount)()
     }
 
-    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {}
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        match self.storage.lookup_attr(parent, name) {
+            Ok(Some(attr)) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
 
-    fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {}
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        match self.storage.getattr(ino) {
+            Ok(Some(attr)) => reply.attr(&Duration::from_secs(1), &attr),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
 
     fn setattr(
         &self,
@@ -49,16 +61,27 @@ impl Filesystem for Lifetimefs {
         _atime: Option<TimeOrNow>,
         _mtime: Option<TimeOrNow>,
         _ctime: Option<SystemTime>,
-        fh: Option<FileHandle>,
+        _fh: Option<FileHandle>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        flags: Option<BsdFileFlags>,
+        _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
+        match self.storage.setattr(ino, mode, uid, gid, size) {
+            Ok(Some(attr)) => reply.attr(&Duration::from_secs(1), &attr),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
     }
 
-    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {}
+    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
+        match self.storage.readlink(ino) {
+            Ok(Some(target)) => reply.data(&target),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
 
     /// Create file node.
     /// Create a regular file, character device, block device, fifo or socket node.
@@ -68,10 +91,15 @@ impl Filesystem for Lifetimefs {
         parent: INodeNo,
         name: &OsStr,
         mode: u32,
-        umask: u32,
-        rdev: u32,
+        _umask: u32,
+        _rdev: u32,
         reply: ReplyEntry,
     ) {
+        match self.storage.mknod(parent, name, mode) {
+            Ok(Some(attr)) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
     }
 
     /// Create a directory.
@@ -81,16 +109,33 @@ impl Filesystem for Lifetimefs {
         parent: INodeNo,
         name: &OsStr,
         mode: u32,
-        umask: u32,
+        _umask: u32,
         reply: ReplyEntry,
     ) {
+        match self.storage.mkdir(parent, name, mode) {
+            Ok(Some(attr)) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
     }
 
     /// Remove a file.
-    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {}
+    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        match self.storage.unlink(parent, name) {
+            Ok(true) => reply.ok(),
+            Ok(false) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
 
     /// Remove a directory.
-    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {}
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        match self.storage.rmdir(parent, name) {
+            Ok(true) => reply.ok(),
+            Ok(false) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
 
     /// Create a symbolic link.
     fn symlink(
@@ -101,6 +146,11 @@ impl Filesystem for Lifetimefs {
         target: &Path,
         reply: ReplyEntry,
     ) {
+        match self.storage.symlink(parent, link_name, target) {
+            Ok(Some(attr)) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
     }
 
     /// Rename a file.
@@ -114,6 +164,11 @@ impl Filesystem for Lifetimefs {
         flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
+        match self.storage.rename(parent, name, newparent, newname, flags) {
+            Ok(true) => reply.ok(),
+            Ok(false) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
     }
 
     /// Create a hard link.
@@ -125,6 +180,95 @@ impl Filesystem for Lifetimefs {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
+        match self.storage.link(ino, newparent, newname) {
+            Ok(Some(attr)) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
+
+    fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+        match self.storage.getattr(ino) {
+            Ok(Some(attr)) if attr.kind == FileType::Directory => {
+                reply.opened(FileHandle(0), FopenFlags::empty());
+            }
+            Ok(Some(_)) => reply.error(Errno::ENOTDIR),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
+
+    fn readdir(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectory,
+    ) {
+        let entries = match self.storage.readdir(ino) {
+            Ok(Some(entries)) => entries,
+            Ok(None) => {
+                reply.error(Errno::ENOENT);
+                return;
+            }
+            Err(_) => {
+                reply.error(Errno::EIO);
+                return;
+            }
+        };
+
+        let mut all_entries: Vec<(INodeNo, FileType, OsString)> =
+            Vec::with_capacity(entries.len() + 2);
+        all_entries.push((ino, FileType::Directory, OsString::from(".")));
+        let parent_ino = match self.storage.parent_ino(ino) {
+            Ok(Some(parent)) => parent,
+            Ok(None) => INodeNo::ROOT,
+            Err(_) => {
+                reply.error(Errno::EIO);
+                return;
+            }
+        };
+        all_entries.push((parent_ino, FileType::Directory, OsString::from("..")));
+        all_entries.extend(entries);
+
+        for (i, (entry_ino, kind, name)) in all_entries.into_iter().enumerate().skip(offset as usize) {
+            let next_offset = (i + 1) as u64;
+            if reply.add(entry_ino, next_offset, kind, name) {
+                break;
+            }
+        }
+
+        reply.ok();
+    }
+
+    fn releasedir(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _flags: OpenFlags,
+        reply: ReplyEmpty,
+    ) {
+        reply.ok();
+    }
+
+    fn read(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        size: u32,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        reply: ReplyData,
+    ) {
+        match self.storage.read(ino, offset, size) {
+            Ok(Some(data)) => reply.data(&data),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
     }
 }
 
@@ -224,5 +368,5 @@ impl Lifetimefs {
             mountpoint.display(),
             errors.join("; ")
         );
-    }
+   }
 }
