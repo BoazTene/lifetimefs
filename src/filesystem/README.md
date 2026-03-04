@@ -85,17 +85,19 @@ Implemented and wired to `StorageInstance` helpers:
 - `readdir`
 - `releasedir`
 - `read`
+- `write`
 
 Current behavior details:
 
 - Path-based operations are parent-inode aware (not root-only).
 - Directory listing (`ls`) works through `readdir`.
 - File reads are served directly from materialized bytes in `head/`.
+- File writes are persisted directly into materialized files in `head/`.
 - Inode/path mapping is currently resolved by scanning under `head/` (no metadata index yet).
 
 Still not implemented in this stage:
 
-- `write` and the full write-path lifecycle (`open`/`create`/`flush`/`release`/`fsync` policy for persistent updates).
+- Full write-path lifecycle (`open`/`create`/`flush`/`release`/`fsync` policy for persistent updates).
 
 So today, lifecycle + storage instance management + read-oriented filesystem operations are implemented, while write-path completeness is pending.
 

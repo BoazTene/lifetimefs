@@ -268,6 +268,34 @@ impl StorageInstance {
         Ok(Some(buf))
     }
 
+    pub fn write(&self, ino: INodeNo, offset: u64, data: &[u8]) -> Result<Option<u32>> {
+        if ino == INodeNo::ROOT {
+            return Ok(None);
+        }
+
+        let Some(path) = self.path_for_ino(ino)? else {
+            return Ok(None);
+        };
+
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to stat {}", path.display()))?;
+        if !metadata.is_file() {
+            return Ok(None);
+        }
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("failed to open {} for write", path.display()))?;
+        file.seek(SeekFrom::Start(offset))
+            .with_context(|| format!("failed to seek {}", path.display()))?;
+        file.write_all(data)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+
+        let written = u32::try_from(data.len()).context("write payload is too large")?;
+        Ok(Some(written))
+    }
+
     pub fn mknod(&self, parent: INodeNo, name: &OsStr, mode: u32) -> Result<Option<FileAttr>> {
         let Some(path) = self.child_path(parent, name)? else {
             return Ok(None);

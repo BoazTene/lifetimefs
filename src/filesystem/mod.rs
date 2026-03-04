@@ -2,7 +2,7 @@ use anyhow::Result;
 use fuser::{
     BackgroundSession, BsdFileFlags, Config, Errno, FileHandle, FileType, Filesystem, FopenFlags,
     Generation, INodeNo, LockOwner, OpenFlags, RenameFlags, ReplyAttr, ReplyData, ReplyDirectory,
-    ReplyEmpty, ReplyEntry, ReplyOpen, Request, TimeOrNow,
+    ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, TimeOrNow, WriteFlags,
 };
 use std::{
     ffi::{OsStr, OsString},
@@ -266,6 +266,25 @@ impl Filesystem for Lifetimefs {
     ) {
         match self.storage.read(ino, offset, size) {
             Ok(Some(data)) => reply.data(&data),
+            Ok(None) => reply.error(Errno::ENOENT),
+            Err(_) => reply.error(Errno::EIO),
+        }
+    }
+
+    fn write(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
+        data: &[u8],
+        _write_flags: WriteFlags,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        reply: ReplyWrite,
+    ) {
+        match self.storage.write(ino, offset, data) {
+            Ok(Some(bytes_written)) => reply.written(bytes_written),
             Ok(None) => reply.error(Errno::ENOENT),
             Err(_) => reply.error(Errno::EIO),
         }
